@@ -97,6 +97,58 @@ export function getBarcodeScanner() {
     return getTauri()?.barcodeScanner;
 }
 
+export function startSpeechRecognition(config) {
+    return invoke('plugin:stt|start_listening', { config });
+}
+
+export function stopSpeechRecognition() {
+    return invoke('plugin:stt|stop_listening');
+}
+
+export function requestSpeechRecognitionPermission() {
+    return invoke('plugin:stt|request_permission');
+}
+
+export function getSpeechRecognitionAvailability() {
+    return invoke('plugin:stt|is_available');
+}
+
+export function listSpeechRecognitionModels() {
+    return invoke('plugin:stt|list_models');
+}
+
+export function installSpeechRecognitionModel(id) {
+    return invoke('plugin:stt|install_model', { id });
+}
+
+export function setSpeechRecognitionModel(id) {
+    return invoke('plugin:stt|set_active_model', { id });
+}
+
+async function listenForSpeechRecognitionEvent(name, legacyName, handler) {
+    const unlisten = await Promise.all([
+        listen(name, (event) => handler(event.payload)),
+        listen(legacyName, (event) => handler(event.payload)),
+    ]);
+    return () => unlisten.forEach(stopListening => stopListening());
+}
+
+export function listenForSpeechRecognitionResult(handler) {
+    return listenForSpeechRecognitionEvent('plugin:stt:result', 'stt://result', handler);
+}
+
+export function listenForSpeechRecognitionState(handler) {
+    return listenForSpeechRecognitionEvent('plugin:stt:stateChange', 'stt://stateChange', handler);
+}
+
+export function listenForSpeechRecognitionError(handler) {
+    return listenForSpeechRecognitionEvent('plugin:stt:error', 'stt://error', handler);
+}
+
+export function listenForSpeechRecognitionDownloadProgress(handler) {
+    return listen('stt://download-progress', (event) => handler(event.payload));
+}
+
 export const convertFileSrc = (path, protocol = 'asset') => {
     const fn = getTauri()?.core?.convertFileSrc;
     if (typeof fn !== 'function') {

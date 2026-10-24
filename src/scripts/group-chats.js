@@ -128,6 +128,7 @@ let group_generation_id = null;
 let fav_grp_checked = false;
 let openGroupId = null;
 let newGroupMembers = [];
+let activeGroupMemberAvatar = null;
 
 export const group_activation_strategy = {
     NATURAL: 0,
@@ -695,6 +696,47 @@ async function getFirstCharacterMessage(character) {
 function resetSelectedGroup() {
     selected_group = null;
     is_group_generating = false;
+    activeGroupMemberAvatar = null;
+    renderGroupCharacterBubbles();
+}
+
+/** Renders the selected group's profile avatars above the chat composer. */
+function renderGroupCharacterBubbles() {
+    const container = document.getElementById('tt_group_character_bubbles');
+    if (!container) return;
+
+    const group = selected_group && groups.find(item => item.id === selected_group);
+    container.replaceChildren();
+    container.hidden = !group || !Array.isArray(group.members) || group.members.length === 0;
+    if (container.hidden) return;
+
+    const manualMode = Number(group.activation_strategy ?? group_activation_strategy.NATURAL) === group_activation_strategy.MANUAL;
+    for (const avatar of group.members) {
+        const characterId = characters.findIndex(character => character.avatar === avatar);
+        if (characterId < 0) continue;
+
+        const character = characters[characterId];
+        const disabled = Array.isArray(group.disabled_members) && group.disabled_members.includes(avatar);
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'tt-group-character-bubble';
+        button.dataset.chid = String(characterId);
+        button.title = disabled
+            ? t`${character.name} is disabled in this group`
+            : manualMode
+                ? t`Have ${character.name} speak next`
+                : t`Set this group to Manual to choose who speaks`;
+        button.setAttribute('aria-label', button.title);
+        button.disabled = disabled || !manualMode || online_status === 'no_connection' || is_send_press || is_group_generating;
+        button.classList.toggle('is-active', activeGroupMemberAvatar === avatar);
+
+        const image = document.createElement('img');
+        image.src = getThumbnailUrl('avatar', character.avatar);
+        image.alt = '';
+        image.loading = 'lazy';
+        button.append(image);
+        container.append(button);
+    }
 }
 
 /**
@@ -1054,6 +1096,7 @@ async function generateGroupWrapper(byAutoMode, type = null, params = {}) {
         throwIfAborted();
         hideSwipeButtons();
         is_group_generating = true;
+        renderGroupCharacterBubbles();
         setCharacterName('');
         setCharacterId(undefined);
         const userInput = String($('#send_textarea').val());
@@ -1134,6 +1177,8 @@ async function generateGroupWrapper(byAutoMode, type = null, params = {}) {
         for (const chId of activatedMembers) {
             throwIfAborted();
             deactivateSendButtons();
+            activeGroupMemberAvatar = characters[chId].avatar;
+            renderGroupCharacterBubbles();
             setCharacterId(chId);
             setCharacterName(characters[chId].name);
             if (power_user.show_group_chat_queue) {
@@ -1159,6 +1204,7 @@ async function generateGroupWrapper(byAutoMode, type = null, params = {}) {
         }
     } finally {
         is_group_generating = false;
+        activeGroupMemberAvatar = null;
         setSendButtonState(false);
         setCharacterId(undefined);
         if (power_user.show_group_chat_queue) {
@@ -1167,6 +1213,7 @@ async function generateGroupWrapper(byAutoMode, type = null, params = {}) {
         }
         setCharacterName('');
         activateSendButtons();
+        renderGroupCharacterBubbles();
         showSwipeButtons();
         await eventSource.emit(event_types.GROUP_WRAPPER_FINISHED, { selected_group, type });
     }
@@ -1527,6 +1574,7 @@ async function modifyGroupMember(groupId, groupMember, isDelete) {
 
     printGroupCandidates();
     printGroupMembers();
+    renderGroupCharacterBubbles();
 
     // Refresh the tag filters for both lists to reflect any new tags
     printTagFilters(tag_filter_type.group_candidates_list);
@@ -1565,6 +1613,7 @@ async function reorderGroupMember(groupId, groupMember, direction) {
     }
 
     printGroupMembers();
+    renderGroupCharacterBubbles();
 
     // Existing groups need to modify members list
     if (openGroupId) {
@@ -1578,6 +1627,7 @@ async function onGroupActivationStrategyInput(e) {
         let _thisGroup = groups.find((x) => x.id == openGroupId);
         _thisGroup.activation_strategy = Number(e.target.value);
         await editGroup(openGroupId, false, false);
+        renderGroupCharacterBubbles();
     }
 }
 
@@ -2121,6 +2171,7 @@ export async function openGroupById(groupId, { chatId } = {}) {
             await clearChat({ clearData: true });
             cancelTtsPlay();
             selected_group = groupId;
+            renderGroupCharacterBubbles();
             setEditedMessageId(undefined);
             updateChatMetadata({}, true);
             const targetChat = chatId ?? group.chat_id;
@@ -2533,6 +2584,18 @@ jQuery(() => {
         const groupId = $(this).attr('data-chid') || $(this).attr('data-grid');
         await openGroupById(groupId);
     });
+    $('#tt_group_character_bubbles').on('click', '.tt-group-character-bubble', function () {
+        const characterId = Number(this.dataset.chid);
+        const group = selected_group && groups.find(item => item.id === selected_group);
+        if (!Number.isInteger(characterId) || characterId < 0 || !group || is_send_press || is_group_generating) return;
+        if (Number(group.activation_strategy ?? group_activation_strategy.NATURAL) !== group_activation_strategy.MANUAL) return;
+
+        Generate('normal', { force_chid: characterId });
+    });
+    eventSource.on(event_types.CHAT_CHANGED, renderGroupCharacterBubbles);
+    eventSource.on(event_types.GROUP_UPDATED, renderGroupCharacterBubbles);
+    eventSource.on(event_types.ONLINE_STATUS_CHANGED, renderGroupCharacterBubbles);
+    renderGroupCharacterBubbles();
     $('#rm_group_filter').on('input', filterGroupMembers);
     $(document).on('input', '.rm_group_members_filter', filterGroupMemberList);
     $('#rm_group_submit').on('click', createGroup);

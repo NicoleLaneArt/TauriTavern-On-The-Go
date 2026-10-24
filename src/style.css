@@ -965,6 +965,62 @@ body .panelControlBar {
     background-color: var(--crimson70a) !important;
 } */
 
+#tt_group_character_bubbles {
+    order: 24;
+    display: flex;
+    align-items: center;
+    gap: 0.55em;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 6px 8px 2px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+}
+
+#tt_group_character_bubbles[hidden] {
+    display: none;
+}
+
+.tt-group-character-bubble {
+    display: block;
+    flex: 0 0 clamp(38px, calc(var(--bottomFormBlockSize) * 1.25), 48px);
+    width: clamp(38px, calc(var(--bottomFormBlockSize) * 1.25), 48px);
+    height: clamp(38px, calc(var(--bottomFormBlockSize) * 1.25), 48px);
+    padding: 0;
+    border: 2px solid var(--SmartThemeBorderColor);
+    border-radius: 50%;
+    overflow: hidden;
+    background: var(--SmartThemeBlurTintColor);
+    cursor: pointer;
+    opacity: 0.92;
+}
+
+.tt-group-character-bubble img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.tt-group-character-bubble:hover,
+.tt-group-character-bubble:focus-visible {
+    border-color: var(--SmartThemeEmColor);
+    opacity: 1;
+}
+
+.tt-group-character-bubble.is-active {
+    border-color: var(--SmartThemeEmColor);
+    box-shadow: 0 0 0 2px var(--SmartThemeEmColor);
+}
+
+.tt-group-character-bubble:disabled {
+    cursor: not-allowed;
+    filter: grayscale(0.7);
+    opacity: 0.45;
+}
+
 #nonQRFormItems {
     padding: 0;
     border: 0;
@@ -972,6 +1028,7 @@ body .panelControlBar {
     background-position: center;
     display: flex;
     flex-direction: row;
+    flex-wrap: wrap;
     column-gap: 5px;
     font-size: var(--bottomFormIconSize);
     order: 25;
@@ -1017,6 +1074,42 @@ body .panelControlBar {
 
 #send_but {
     order: 2;
+}
+
+#tt_dictation_button {
+    order: 1;
+    color: var(--SmartThemeBodyColor);
+}
+
+#tt_dictation_button.is-recording {
+    color: var(--crimsonTextColor, #e84a5f);
+    opacity: 1;
+    animation: tt-dictation-pulse 1.2s ease-in-out infinite alternate;
+}
+
+#tt_dictation_button:focus-visible {
+    outline: 2px solid var(--SmartThemeEmColor);
+    outline-offset: 2px;
+}
+
+.tt-dictation-status {
+    order: 4;
+    flex: 0 0 100%;
+    min-width: 0;
+    min-height: 0;
+    padding: 0 0.5em;
+    font-size: 0.75em;
+    color: var(--SmartThemeBodyColor);
+    overflow-wrap: anywhere;
+}
+
+.tt-dictation-status:empty {
+    display: none;
+}
+
+@keyframes tt-dictation-pulse {
+    from { opacity: 0.55; }
+    to { opacity: 1; }
 }
 
 #mes_continue {
@@ -1687,6 +1780,7 @@ button {
     margin: 0;
     text-shadow: 0px 0px calc(var(--shadowWidth) * 1px) var(--SmartThemeShadowColor);
     flex: 1;
+    min-width: 0;
     order: 3;
     field-sizing: content;
 

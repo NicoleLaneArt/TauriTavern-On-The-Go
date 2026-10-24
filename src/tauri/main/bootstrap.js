@@ -382,6 +382,11 @@ export function bootstrapTauriMain() {
         .then(({ installTauriTavernSettingsPanel }) => installTauriTavernSettingsPanel())
         .catch((error) => { console.warn('TauriTavern: Failed to load settings panels:', error); }));
     eventSource.once(event_types.APP_READY, restoreAgentAssemblyBridges);
+    eventSource.once(event_types.APP_READY, () => {
+        void import('./services/chat-dictation/install.js')
+            .then(({ installChatDictation }) => installChatDictation())
+            .catch((error) => { console.error('TauriTavern: Failed to install chat dictation:', error); });
+    });
     // This panel imports application state as well as rendering it.
     eventSource.once(event_types.APP_READY, () => {
         void import('../../scripts/tauri/generation-params/panel.js')

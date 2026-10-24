@@ -35,7 +35,8 @@ pub(super) fn install<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<
         .plugin(DialogPlugin(tauri_plugin_dialog::init()))
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_stt::init());
 
     #[cfg(any(target_os = "android", target_env = "ohos"))]
     let builder = builder.plugin(crate::platform::window_layout::plugin());

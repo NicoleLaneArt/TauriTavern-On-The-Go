@@ -512,6 +512,11 @@
         flex-wrap: wrap;
         height: unset;
     }
+
+    #rightSendForm {
+        width: calc(var(--bottomFormBlockSize) * 2);
+        flex-wrap: nowrap;
+    }
 }
 
 /* The chat list owns scrolling inside its viewport-sized shell. */

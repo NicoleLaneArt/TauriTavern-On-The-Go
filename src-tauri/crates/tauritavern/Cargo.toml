@@ -26,6 +26,8 @@ tauri-plugin-fs = "2.7.0"
 tauri-plugin-notification = "2.6.0"
 tauri-plugin-dialog = "2.8.2"
 tauri-plugin-clipboard-manager = "2.4.2"
+# Chat dictation (desktop: local Whisper; Android/iOS: native OS speech recognizer)
+tauri-plugin-stt = "0.2.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
