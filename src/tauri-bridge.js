@@ -125,24 +125,40 @@ export function setSpeechRecognitionModel(id) {
     return invoke('plugin:stt|set_active_model', { id });
 }
 
-async function listenForSpeechRecognitionEvent(name, legacyName, handler) {
+// Mobile plugins deliver events through plugin channels (Kotlin `trigger`),
+// not the global event bus the desktop backend emits on.
+async function addSpeechPluginListener(event, handler) {
+    const tauri = getTauri();
+    const addPluginListener = tauri?.core?.addPluginListener;
+    if (typeof addPluginListener === 'function') {
+        const listener = await addPluginListener('stt', event, handler);
+        return () => void listener?.unregister?.();
+    }
+
+    const handlerChannel = createChannel(handler);
+    await invoke('plugin:stt|registerListener', { event, handler: handlerChannel });
+    return () => void invoke('plugin:stt|remove_listener', { event, channelId: handlerChannel.id }).catch(() => {});
+}
+
+async function listenForSpeechRecognitionEvent(name, legacyName, pluginEvent, handler) {
     const unlisten = await Promise.all([
         listen(name, (event) => handler(event.payload)),
         listen(legacyName, (event) => handler(event.payload)),
+        addSpeechPluginListener(pluginEvent, handler).catch(() => () => {}),
     ]);
     return () => unlisten.forEach(stopListening => stopListening());
 }
 
 export function listenForSpeechRecognitionResult(handler) {
-    return listenForSpeechRecognitionEvent('plugin:stt:result', 'stt://result', handler);
+    return listenForSpeechRecognitionEvent('plugin:stt:result', 'stt://result', 'result', handler);
 }
 
 export function listenForSpeechRecognitionState(handler) {
-    return listenForSpeechRecognitionEvent('plugin:stt:stateChange', 'stt://stateChange', handler);
+    return listenForSpeechRecognitionEvent('plugin:stt:stateChange', 'stt://stateChange', 'stateChange', handler);
 }
 
 export function listenForSpeechRecognitionError(handler) {
-    return listenForSpeechRecognitionEvent('plugin:stt:error', 'stt://error', handler);
+    return listenForSpeechRecognitionEvent('plugin:stt:error', 'stt://error', 'error', handler);
 }
 
 export function listenForSpeechRecognitionDownloadProgress(handler) {

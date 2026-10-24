@@ -128,36 +128,60 @@ export function installChatDictation() {
         transcriptSegments.push(segment);
     }).catch((error) => console.error('TauriTavern: Failed to listen for speech results:', error));
 
+    let stopRequested = false;
+    let stopFallbackTimer = 0;
+
+    // Move collected segments into the composer and return to idle.
+    const finishSession = (message) => {
+        window.clearTimeout(stopFallbackTimer);
+        stopFallbackTimer = 0;
+        stopRequested = false;
+        const transcript = transcriptSegments.join(' ').trim();
+        transcriptSegments = [];
+        state = 'idle';
+        if (transcript) {
+            appendDraft(textarea, transcript);
+            setStatus('Transcript added to your draft. Review it, then tap Send.');
+        } else if (message) {
+            setStatus(message);
+        } else if (!isInstallingModel) {
+            setStatus('Ready.');
+        }
+        updateButton();
+    };
+
     void listenForSpeechRecognitionState((event) => {
         const nextState = String(event?.state ?? '');
         if (nextState === 'listening') {
+            if (stopRequested) {
+                return;
+            }
             state = 'listening';
             setStatus('Recording… Tap the microphone again to stop and transcribe.');
         } else if (nextState === 'processing') {
+            // Android reports "processing" at the start and end of each spoken
+            // phrase while still recording; only show it once the user stops.
+            if (!stopRequested) {
+                return;
+            }
             state = 'processing';
             setStatus('Transcribing…');
         } else if (nextState === 'idle') {
             if (state !== 'listening' && state !== 'processing') {
                 return;
             }
-            const transcript = transcriptSegments.join(' ').trim();
-            transcriptSegments = [];
-            state = 'idle';
-            if (transcript) {
-                appendDraft(textarea, transcript);
-                setStatus('Transcript added to your draft. Review it, then tap Send.');
-            } else if (!isInstallingModel) {
-                setStatus('Ready.');
-            }
+            finishSession();
+            return;
         }
         updateButton();
     }).catch((error) => console.error('TauriTavern: Failed to listen for speech state:', error));
 
     void listenForSpeechRecognitionError((error) => {
-        transcriptSegments = [];
-        state = 'idle';
-        setStatus(normalizeError(error));
-        updateButton();
+        if (state !== 'listening' && state !== 'processing') {
+            return;
+        }
+        // Keep anything already transcribed; only surface the error if nothing was captured.
+        finishSession(normalizeError(error));
     }).catch((error) => console.error('TauriTavern: Failed to listen for speech errors:', error));
 
     void listenForSpeechRecognitionDownloadProgress((progress) => {
@@ -172,6 +196,7 @@ export function installChatDictation() {
     });
 
     const start = async () => {
+        stopRequested = false;
         state = 'starting';
         transcriptSegments = [];
         setStatus('Checking microphone permission…');
@@ -224,15 +249,21 @@ export function installChatDictation() {
     };
 
     const stop = async () => {
+        stopRequested = true;
         state = 'processing';
         setStatus('Stopping and transcribing…');
         updateButton();
+        // Never leave the button stuck if the engine does not report back.
+        window.clearTimeout(stopFallbackTimer);
+        stopFallbackTimer = window.setTimeout(() => {
+            if (state === 'processing') {
+                finishSession('No speech was recognized. Try again.');
+            }
+        }, 8000);
         try {
             await stopSpeechRecognition();
         } catch (error) {
-            state = 'idle';
-            setStatus(normalizeError(error));
-            updateButton();
+            finishSession(normalizeError(error));
         }
     };
 
