@@ -4,6 +4,12 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.os.ParcelFileDescriptor
+import java.io.File
+import java.io.FileOutputStream
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -60,6 +66,7 @@ class SttPlugin(private val activity: Activity) : Plugin(activity) {
         private const val MAX_CONSECUTIVE_ERRORS = 3
         private const val RESTART_DELAY_MS = 150L
         private const val STOP_FALLBACK_MS = 4000L
+        private const val RECORD_SAMPLE_RATE = 16000
         private const val ERROR_RESET_TIME_MS = 30000L // 30 seconds
     }
 
@@ -87,6 +94,10 @@ class SttPlugin(private val activity: Activity) : Plugin(activity) {
 
     fun cleanup() {
         Log.d(TAG, "cleanup() CALLED")
+        pressRecording = false
+        try { audioRecord?.stop() } catch (_: Exception) {}
+        audioRecord?.release()
+        audioRecord = null
         Log.d(TAG, "  isListening: $isListening")
         Log.d(TAG, "  consecutiveErrors: $consecutiveErrors")
         
@@ -170,6 +181,14 @@ class SttPlugin(private val activity: Activity) : Plugin(activity) {
             return
         }
         Log.d(TAG, "Microphone permission granted")
+
+        // Nicole's build: on Android 13+ record straight through until the user
+        // taps stop, then transcribe the whole recording with the phone's own
+        // speech engine (no live recognizer, no beeps, no auto-ending).
+        if (Build.VERSION.SDK_INT >= 33) {
+            startPressRecording(config, invoke)
+            return
+        }
 
         val recognitionAvailable = SpeechRecognizer.isRecognitionAvailable(activity)
         Log.d(TAG, "Speech recognition available: $recognitionAvailable")
@@ -431,6 +450,11 @@ class SttPlugin(private val activity: Activity) : Plugin(activity) {
     fun stopListening(invoke: Invoke) {
         Log.i(TAG, "============================================")
         Log.i(TAG, "stopListening() CALLED")
+        if (pressRecording && Build.VERSION.SDK_INT >= 33) {
+            stopPressRecordingAndTranscribe()
+            invoke.resolve()
+            return
+        }
         Log.d(TAG, "  isListening: $isListening")
         Log.d(TAG, "  consecutiveErrors: $consecutiveErrors")
         
@@ -609,6 +633,189 @@ class SttPlugin(private val activity: Activity) : Plugin(activity) {
             }
         }
         pollHandler.postDelayed(poll, 400L)
+    }
+
+    // ---- Nicole's build: press-to-record, then transcribe the recording ----
+
+    @Volatile private var pressRecording = false
+    private var audioRecord: AudioRecord? = null
+    private var recordThread: Thread? = null
+    private var recordFile: File? = null
+    private var recordLanguage: String = Locale.getDefault().toLanguageTag()
+    private var fileRecognizer: SpeechRecognizer? = null
+    private var fileDescriptor: ParcelFileDescriptor? = null
+    private val recordHandler = Handler(Looper.getMainLooper())
+
+    private fun emitState(state: String, transcribing: Boolean = false) {
+        val event = JSObject()
+        event.put("state", state)
+        if (transcribing) event.put("transcribing", true)
+        trigger("stateChange", event)
+    }
+
+    private fun emitError(code: String, message: String) {
+        val event = JSObject()
+        event.put("code", code)
+        event.put("message", message)
+        trigger("error", event)
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    @androidx.annotation.RequiresApi(33)
+    private fun startPressRecording(config: ListenConfig, invoke: Invoke) {
+        if (pressRecording || isListening) {
+            invoke.reject("Already listening")
+            return
+        }
+        recordLanguage = config.language ?: Locale.getDefault().toLanguageTag()
+        val minBuffer = AudioRecord.getMinBufferSize(
+            RECORD_SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+        )
+        val bufferSize = maxOf(minBuffer, RECORD_SAMPLE_RATE) // ~0.5s of audio
+        val recorder = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                RECORD_SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+        } catch (e: Exception) {
+            invoke.reject("Could not open the microphone: ${e.message}")
+            return
+        }
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            recorder.release()
+            invoke.reject("Could not open the microphone.")
+            return
+        }
+        val file = File(activity.cacheDir, "dictation-${System.currentTimeMillis()}.pcm")
+        audioRecord = recorder
+        recordFile = file
+        pressRecording = true
+        recorder.startRecording()
+        recordThread = Thread {
+            val buffer = ByteArray(bufferSize)
+            FileOutputStream(file).use { out ->
+                while (pressRecording) {
+                    val read = recorder.read(buffer, 0, buffer.size)
+                    if (read > 0) out.write(buffer, 0, read)
+                }
+            }
+        }.apply { name = "tt-dictation-recorder"; start() }
+
+        if (config.maxDuration > 0) {
+            recordHandler.postDelayed({
+                if (pressRecording) {
+                    Log.d(TAG, "Max recording duration reached; transcribing")
+                    stopPressRecordingAndTranscribe()
+                }
+            }, config.maxDuration.toLong())
+        }
+        Log.d(TAG, "Press-to-record started -> ${file.name}")
+        emitState("listening")
+        invoke.resolve()
+    }
+
+    @androidx.annotation.RequiresApi(33)
+    private fun stopPressRecordingAndTranscribe() {
+        recordHandler.removeCallbacksAndMessages(null)
+        if (!pressRecording) return
+        pressRecording = false
+        try { audioRecord?.stop() } catch (_: Exception) {}
+        try { recordThread?.join(2000) } catch (_: Exception) {}
+        audioRecord?.release()
+        audioRecord = null
+        recordThread = null
+        val file = recordFile
+        recordFile = null
+        if (file == null || !file.exists() || file.length() < RECORD_SAMPLE_RATE / 2) {
+            file?.delete()
+            emitState("idle")
+            return
+        }
+        emitState("processing", transcribing = true)
+        val onDevice = SpeechRecognizer.isOnDeviceRecognitionAvailable(activity)
+        transcribeFile(file, if (onDevice) listOf(true, false) else listOf(false))
+    }
+
+    @androidx.annotation.RequiresApi(33)
+    private fun transcribeFile(file: File, attempts: List<Boolean>) {
+        val useOnDevice = attempts.first()
+        val remaining = attempts.drop(1)
+        activity.runOnUiThread {
+            var gotText = false
+            var finished = false
+            fun finish(errorCode: String? = null, errorMessage: String? = null) {
+                if (finished) return
+                finished = true
+                try { fileRecognizer?.destroy() } catch (_: Exception) {}
+                fileRecognizer = null
+                try { fileDescriptor?.close() } catch (_: Exception) {}
+                fileDescriptor = null
+                if (!gotText && errorCode != null && remaining.isNotEmpty()) {
+                    Log.w(TAG, "Transcription attempt failed ($errorCode); trying fallback engine")
+                    transcribeFile(file, remaining)
+                    return
+                }
+                file.delete()
+                if (!gotText && errorCode != null) emitError(errorCode, errorMessage ?: "Transcription failed")
+                emitState("idle")
+            }
+            fun deliver(bundle: Bundle?) {
+                val text = bundle?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                if (!text.isNullOrBlank()) {
+                    gotText = true
+                    val event = JSObject()
+                    event.put("transcript", text)
+                    event.put("isFinal", true)
+                    trigger("result", event)
+                }
+            }
+            try {
+                val recognizer = if (useOnDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(activity)
+                    else SpeechRecognizer.createSpeechRecognizer(activity)
+                fileRecognizer = recognizer
+                val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                fileDescriptor = pfd
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, activity.packageName)
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, recordLanguage)
+                    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pfd)
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, RECORD_SAMPLE_RATE)
+                    putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
+                }
+                recognizer.setRecognitionListener(object : RecognitionListener {
+                    override fun onReadyForSpeech(params: Bundle?) {}
+                    override fun onBeginningOfSpeech() {}
+                    override fun onRmsChanged(rmsdB: Float) {}
+                    override fun onBufferReceived(buffer: ByteArray?) {}
+                    override fun onEndOfSpeech() {}
+                    override fun onPartialResults(partialResults: Bundle?) {}
+                    override fun onEvent(eventType: Int, params: Bundle?) {}
+                    override fun onSegmentResults(segmentResults: Bundle) { deliver(segmentResults) }
+                    override fun onEndOfSegmentedSession() { finish() }
+                    override fun onResults(results: Bundle?) { deliver(results); finish() }
+                    override fun onError(error: Int) {
+                        Log.e(TAG, "File transcription error: ${getErrorMessage(error)} ($error), onDevice=$useOnDevice")
+                        if (useOnDevice && (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
+                                error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE)) {
+                            try { recognizer.triggerModelDownload(intent) } catch (_: Exception) {}
+                        }
+                        if (gotText || error == SpeechRecognizer.ERROR_NO_MATCH) finish()
+                        else finish(getErrorCode(error), "The phone could not transcribe the recording: ${getErrorMessage(error)}")
+                    }
+                })
+                Log.d(TAG, "Transcribing ${file.length()} bytes (onDevice=$useOnDevice)")
+                recognizer.startListening(intent)
+            } catch (e: Exception) {
+                finish("TRANSCRIBE_FAILED", "The phone could not transcribe the recording: ${e.message}")
+            }
+        }
     }
 
     private fun createRecognizerIntent(config: ListenConfig): Intent {

@@ -126,10 +126,23 @@ export function installChatDictation() {
         lastTranscriptSegment = segment;
         lastTranscriptAt = now;
         transcriptSegments.push(segment);
+        if (state === 'processing') {
+            armStopFallback(60_000);
+        }
     }).catch((error) => console.error('TauriTavern: Failed to listen for speech results:', error));
 
     let stopRequested = false;
     let stopFallbackTimer = 0;
+
+    /** @param {number} ms */
+    const armStopFallback = (ms) => {
+        window.clearTimeout(stopFallbackTimer);
+        stopFallbackTimer = window.setTimeout(() => {
+            if (state === 'processing') {
+                finishSession('No speech was recognized. Try again.');
+            }
+        }, ms);
+    };
 
     // Move collected segments into the composer and return to idle.
     const finishSession = (message) => {
@@ -159,13 +172,19 @@ export function installChatDictation() {
             state = 'listening';
             setStatus('Recording… Tap the microphone again to stop and transcribe.');
         } else if (nextState === 'processing') {
-            // Android reports "processing" at the start and end of each spoken
-            // phrase while still recording; only show it once the user stops.
-            if (!stopRequested) {
+            // Android's live recognizer reports "processing" at the start and end of
+            // each phrase while still recording; only show it once recording ends.
+            // Recording mode marks real transcription with `transcribing`.
+            const transcribing = Boolean(event?.transcribing);
+            if (!stopRequested && !transcribing) {
                 return;
             }
+            if (transcribing) {
+                stopRequested = true;
+                armStopFallback(180_000);
+            }
             state = 'processing';
-            setStatus('Transcribing…');
+            setStatus('Transcribing your recording…');
         } else if (nextState === 'idle') {
             if (state !== 'listening' && state !== 'processing') {
                 return;
@@ -254,12 +273,8 @@ export function installChatDictation() {
         setStatus('Stopping and transcribing…');
         updateButton();
         // Never leave the button stuck if the engine does not report back.
-        window.clearTimeout(stopFallbackTimer);
-        stopFallbackTimer = window.setTimeout(() => {
-            if (state === 'processing') {
-                finishSession('No speech was recognized. Try again.');
-            }
-        }, 8000);
+        // (Recording mode extends this once transcription starts.)
+        armStopFallback(8000);
         try {
             await stopSpeechRecognition();
         } catch (error) {
