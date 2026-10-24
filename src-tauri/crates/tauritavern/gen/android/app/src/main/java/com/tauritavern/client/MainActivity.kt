@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebChromeClient
 import java.util.concurrent.ExecutorService
@@ -91,6 +92,7 @@ class MainActivity : TauriActivity(), AndroidWebFullscreenHost {
 
   override fun onWebViewCreate(webView: WebView) {
     this.webView = webView
+    webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
     webView.addJavascriptInterface(aiGenerationJsBridge, AndroidAiGenerationJsBridge.INTERFACE_NAME)
     webView.addJavascriptInterface(systemUiJsBridge, AndroidSystemUiJsBridge.INTERFACE_NAME)
     windowLayout.onWebViewAvailable()

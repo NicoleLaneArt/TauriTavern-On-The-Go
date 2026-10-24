@@ -58,6 +58,7 @@ android {
             }
         }
         getByName("release") {
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
             isMinifyEnabled = true
             isShrinkResources = true
             signingConfig = signingConfigs.getByName("release")
