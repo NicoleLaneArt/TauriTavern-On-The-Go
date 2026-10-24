@@ -58,7 +58,7 @@ class SttPlugin(private val activity: Activity) : Plugin(activity) {
         private const val TAG = "SttPlugin"
         private const val PERMISSION_REQUEST_CODE = 1001
         private const val MAX_CONSECUTIVE_ERRORS = 3
-        private const val RESTART_DELAY_MS = 500L
+        private const val RESTART_DELAY_MS = 150L
         private const val STOP_FALLBACK_MS = 4000L
         private const val ERROR_RESET_TIME_MS = 30000L // 30 seconds
     }
@@ -361,6 +361,35 @@ class SttPlugin(private val activity: Activity) : Plugin(activity) {
                     }
 
                     override fun onEvent(eventType: Int, params: Bundle?) {}
+
+                    override fun onSegmentResults(segmentResults: Bundle) {
+                        val matches = segmentResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        Log.d(TAG, "onSegmentResults - matches: ${matches?.size ?: 0}")
+                        if (!matches.isNullOrEmpty() && matches[0].isNotBlank()) {
+                            consecutiveErrors = 0
+                            val event = JSObject()
+                            event.put("transcript", matches[0])
+                            event.put("isFinal", true)
+                            trigger("result", event)
+                        }
+                    }
+
+                    override fun onEndOfSegmentedSession() {
+                        Log.d(TAG, "onEndOfSegmentedSession - isListening: $isListening")
+                        if (isListening && config.continuous) {
+                            // The service ended the session on its own; keep recording.
+                            restartHandler.postDelayed({
+                                if (isListening && speechRecognizer != null) {
+                                    speechRecognizer?.startListening(intent)
+                                }
+                            }, RESTART_DELAY_MS)
+                            return
+                        }
+                        isListening = false
+                        val stateEvent = JSObject()
+                        stateEvent.put("state", "idle")
+                        trigger("stateChange", stateEvent)
+                    }
                 })
 
                 Log.d(TAG, "Starting listener with intent")
@@ -559,7 +588,27 @@ class SttPlugin(private val activity: Activity) : Plugin(activity) {
             PERMISSION_REQUEST_CODE
         )
         Log.d(TAG, "  Permission dialog shown, waiting for result...")
-        // Don't resolve here - wait for onRequestPermissionsResult callback
+        // Nicole's build: the dialog result is never routed back to this plugin,
+        // so poll until the permission is granted (or give up after 60s).
+        val pollHandler = Handler(Looper.getMainLooper())
+        val startedAt = System.currentTimeMillis()
+        val poll = object : Runnable {
+            override fun run() {
+                val pending = pendingPermissionInvoke ?: return
+                val granted = ContextCompat.checkSelfPermission(activity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                if (granted || System.currentTimeMillis() - startedAt > 60_000L) {
+                    val result = JSObject()
+                    val state = if (granted) "granted" else "denied"
+                    result.put("microphone", state)
+                    result.put("speechRecognition", state)
+                    pendingPermissionInvoke = null
+                    pending.resolve(result)
+                } else {
+                    pollHandler.postDelayed(this, 400L)
+                }
+            }
+        }
+        pollHandler.postDelayed(poll, 400L)
     }
 
     private fun createRecognizerIntent(config: ListenConfig): Intent {
@@ -595,6 +644,16 @@ class SttPlugin(private val activity: Activity) : Plugin(activity) {
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1000L)
+
+            // Nicole's build: one continuous session on Android 13+ (no restart
+            // beeps between phrases); text arrives per segment.
+            if (config.continuous && Build.VERSION.SDK_INT >= 33) {
+                putExtra(
+                    RecognizerIntent.EXTRA_SEGMENTED_SESSION,
+                    RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS
+                )
+                Log.d(TAG, "  SEGMENTED_SESSION: enabled")
+            }
             Log.d(TAG, "  SILENCE_LENGTH: 3000ms, MINIMUM_LENGTH: 1000ms")
         }
     }
