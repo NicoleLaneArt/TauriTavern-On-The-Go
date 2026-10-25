@@ -15,8 +15,7 @@ export function installSpeakButtons() {
         window.clearInterval(pollTimer);
         pollTimer = 0;
         if (activeButton) {
-            activeButton.classList.remove('is-playing', 'fa-stop');
-            activeButton.classList.add('fa-volume-high');
+            activeButton.classList.remove('is-playing');
             activeButton.setAttribute('aria-label', 'Read this message aloud');
             activeButton.title = 'Read aloud';
         }
@@ -27,8 +26,7 @@ export function installSpeakButtons() {
     const markActive = (button) => {
         clearActive();
         activeButton = button;
-        button.classList.add('is-playing', 'fa-stop');
-        button.classList.remove('fa-volume-high');
+        button.classList.add('is-playing');
         button.setAttribute('aria-label', 'Stop reading');
         button.title = 'Stop';
         let sawBusy = false;
