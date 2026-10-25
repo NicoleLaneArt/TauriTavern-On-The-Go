@@ -483,6 +483,11 @@ async function addAudioJob(response, char) {
         if (!audioBlob.type.startsWith('audio/')) {
             throw `TTS received HTTP response with invalid data format. Expecting audio/*, got ${audioBlob.type}`;
         }
+        // Nicole's build: Android WebView doesn't recognise the 'audio/opus' label;
+        // Opus files are Ogg-contained, which it plays when labelled audio/ogg.
+        if (/^audio\/(x-)?opus\b/i.test(audioBlob.type)) {
+            audioBlob = new Blob([audioBlob], { type: 'audio/ogg' });
+        }
         mimeType = audioBlob.type;
     }
     audioJobQueue.push({ audioBlob, char });
