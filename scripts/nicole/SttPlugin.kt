@@ -67,6 +67,8 @@ class SttPlugin(private val activity: Activity) : Plugin(activity) {
         private const val RESTART_DELAY_MS = 150L
         private const val STOP_FALLBACK_MS = 4000L
         private const val RECORD_SAMPLE_RATE = 16000
+        // 1.0 = real time. Raise once accuracy is confirmed.
+        private const val FEED_SPEED = 1.0
         private const val ERROR_RESET_TIME_MS = 30000L // 30 seconds
     }
 
@@ -776,8 +778,12 @@ class SttPlugin(private val activity: Activity) : Plugin(activity) {
                 val recognizer = if (useOnDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(activity)
                     else SpeechRecognizer.createSpeechRecognizer(activity)
                 fileRecognizer = recognizer
-                val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                // Feed the recording through a pipe at talking speed: some engines drop
+                // audio when handed a whole file at once.
+                val pipe = ParcelFileDescriptor.createPipe()
+                val pfd = pipe[0]
                 fileDescriptor = pfd
+                val writeSide = pipe[1]
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, activity.packageName)
@@ -812,6 +818,29 @@ class SttPlugin(private val activity: Activity) : Plugin(activity) {
                 })
                 Log.d(TAG, "Transcribing ${file.length()} bytes (onDevice=$useOnDevice)")
                 recognizer.startListening(intent)
+                Thread {
+                    try {
+                        ParcelFileDescriptor.AutoCloseOutputStream(writeSide).use { out ->
+                            java.io.FileInputStream(file).use { input ->
+                                val bytesPerSecond = RECORD_SAMPLE_RATE * 2L
+                                val chunk = ByteArray((bytesPerSecond / 10).toInt()) // 100 ms
+                                val started = android.os.SystemClock.elapsedRealtime()
+                                var sent = 0L
+                                while (true) {
+                                    val n = input.read(chunk)
+                                    if (n <= 0) break
+                                    out.write(chunk, 0, n)
+                                    sent += n
+                                    val dueMs = (sent * 1000 / bytesPerSecond / FEED_SPEED).toLong()
+                                    val aheadMs = dueMs - (android.os.SystemClock.elapsedRealtime() - started)
+                                    if (aheadMs > 0) Thread.sleep(aheadMs)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.d(TAG, "Recording feed ended: ${e.message}")
+                    }
+                }.apply { name = "tt-dictation-feeder"; start() }
             } catch (e: Exception) {
                 finish("TRANSCRIBE_FAILED", "The phone could not transcribe the recording: ${e.message}")
             }
