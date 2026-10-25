@@ -519,10 +519,117 @@ function completeTtsJob() {
     currentTtsJob = null;
 }
 
+//#######################//
+//  Audio cache (Nicole)  //
+//#######################//
+
+// Generated speech is kept on this device so replaying a message is instant,
+// even after the phone locks or the app restarts. Any change to the text,
+// voice or provider settings produces a new key (and fresh audio).
+const TTS_CACHE_DB = 'tt-tts-audio-cache';
+const TTS_CACHE_STORE = 'audio';
+const TTS_CACHE_MAX_ENTRIES = 80;
+let ttsCacheDbPromise = null;
+
+function openTtsCache() {
+    ttsCacheDbPromise ??= new Promise((resolve) => {
+        try {
+            const request = indexedDB.open(TTS_CACHE_DB, 1);
+            request.onupgradeneeded = () => {
+                const store = request.result.createObjectStore(TTS_CACHE_STORE, { keyPath: 'key' });
+                store.createIndex('ts', 'ts');
+            };
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => resolve(null);
+        } catch {
+            resolve(null);
+        }
+    });
+    return ttsCacheDbPromise;
+}
+
+async function ttsCacheKey(text, voiceId, voiceMapKey) {
+    const settings = JSON.stringify(extension_settings.tts?.[ttsProviderName] ?? {});
+    const raw = JSON.stringify([ttsProviderName, voiceId, voiceMapKey, text, settings]);
+    try {
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+        return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+    } catch {
+        return raw;
+    }
+}
+
+async function ttsCacheGet(key) {
+    try {
+        const db = await openTtsCache();
+        if (!db) return null;
+        return await new Promise((resolve) => {
+            const tx = db.transaction(TTS_CACHE_STORE, 'readwrite');
+            const store = tx.objectStore(TTS_CACHE_STORE);
+            const request = store.get(key);
+            request.onsuccess = () => {
+                const entry = request.result;
+                if (entry?.blob instanceof Blob) {
+                    entry.ts = Date.now();
+                    store.put(entry);
+                    resolve(entry.blob);
+                } else {
+                    resolve(null);
+                }
+            };
+            request.onerror = () => resolve(null);
+        });
+    } catch {
+        return null;
+    }
+}
+
+async function ttsCachePut(key, blob) {
+    try {
+        const db = await openTtsCache();
+        if (!db || !(blob instanceof Blob)) return;
+        const tx = db.transaction(TTS_CACHE_STORE, 'readwrite');
+        const store = tx.objectStore(TTS_CACHE_STORE);
+        store.put({ key, blob, ts: Date.now() });
+        const countRequest = store.count();
+        countRequest.onsuccess = () => {
+            let excess = countRequest.result - TTS_CACHE_MAX_ENTRIES;
+            if (excess <= 0) return;
+            store.index('ts').openCursor().onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (!cursor || excess <= 0) return;
+                cursor.delete();
+                excess--;
+                cursor.continue();
+            };
+        };
+    } catch {
+        // Caching is best-effort.
+    }
+}
+
 async function tts(text, voiceId, char, voiceMapKey = null) {
     const messageId = currentTtsJob?.id ?? null;
 
     await eventSource.emit(event_types.TTS_JOB_STARTED, { messageId, characterName: char, text, voiceId });
+
+    const cacheKey = ttsProviderName === 'System' ? null : await ttsCacheKey(text, voiceId, voiceMapKey);
+    const cachedBlob = cacheKey ? await ttsCacheGet(cacheKey) : null;
+    if (cachedBlob) {
+        console.debug('TTS: playing cached audio');
+        const audioResult = await addAudioJob(new Response(cachedBlob, { headers: { 'Content-Type': cachedBlob.type } }), char);
+        await eventSource.emit(event_types.TTS_AUDIO_READY, {
+            messageId,
+            characterName: char,
+            text,
+            audio: audioResult.audioBlob,
+            mimeType: audioResult.mimeType,
+        });
+        await eventSource.emit(event_types.TTS_JOB_COMPLETE, { messageId, characterName: char });
+        completeTtsJob();
+        return;
+    }
+    let cacheable = Boolean(cacheKey);
 
     async function processResponse(response) {
         // RVC injection
@@ -530,6 +637,9 @@ async function tts(text, voiceId, char, voiceMapKey = null) {
             response = await globalThis.rvcVoiceConversion(response, char, text);
 
         const audioResult = await addAudioJob(response, char);
+        if (cacheable && audioResult.audioBlob instanceof Blob) {
+            void ttsCachePut(cacheKey, audioResult.audioBlob);
+        }
         await eventSource.emit(event_types.TTS_AUDIO_READY, {
             messageId,
             characterName: char,
@@ -544,6 +654,8 @@ async function tts(text, voiceId, char, voiceMapKey = null) {
 
     // If async generator, process every chunk as it comes in
     if (typeof response[Symbol.asyncIterator] === 'function') {
+        // Streamed providers deliver several pieces; don't cache partial audio.
+        cacheable = false;
         for await (const chunk of response) {
             await processResponse(chunk);
         }
