@@ -383,6 +383,11 @@ export function bootstrapTauriMain() {
         .catch((error) => { console.warn('TauriTavern: Failed to load settings panels:', error); }));
     eventSource.once(event_types.APP_READY, restoreAgentAssemblyBridges);
     eventSource.once(event_types.APP_READY, () => {
+        void import('./services/speak-button/install.js')
+            .then(({ installSpeakButtons }) => installSpeakButtons())
+            .catch((error) => { console.error('TauriTavern: Failed to install speak buttons:', error); });
+    });
+    eventSource.once(event_types.APP_READY, () => {
         void import('./services/chat-dictation/install.js')
             .then(({ installChatDictation }) => installChatDictation())
             .catch((error) => { console.error('TauriTavern: Failed to install chat dictation:', error); });

@@ -6915,3 +6915,46 @@ button:where(.fa, .fas, .far, .fab, .fa-solid, .fa-regular, .fa-brands, .right_m
     outline: 1px solid var(--interactable-outline-color);
     outline-offset: -1px;
 }
+
+/* Nicole's build: high-contrast read-aloud button beside character messages. */
+.mes:not([is_user="true"]):not([is_system="true"]) .mesAvatarWrapper {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.tt-speak-button {
+    display: none;
+    margin-top: auto;
+    margin-bottom: 6px;
+    flex: 0 0 auto;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 3px solid #000;
+    border-radius: 50%;
+    background: #ffd400;
+    color: #000;
+    font-size: 20px;
+    line-height: 38px;
+    text-align: center;
+    cursor: pointer;
+    box-shadow: 0 0 0 2px #fff;
+}
+
+.mes:not([is_user="true"]):not([is_system="true"]) .tt-speak-button {
+    display: block;
+}
+
+.tt-speak-button.is-playing {
+    background: #fff;
+    color: #c4001a;
+    border-color: #c4001a;
+    box-shadow: 0 0 0 2px #000;
+}
+
+.tt-speak-button:focus-visible {
+    outline: 3px solid #00e5ff;
+    outline-offset: 2px;
+}

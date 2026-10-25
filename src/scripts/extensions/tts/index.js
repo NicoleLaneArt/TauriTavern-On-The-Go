@@ -1620,6 +1620,8 @@ export async function init() {
         }
         $('#tts_provider').on('change', onTtsProviderChange);
         $(document).on('click', '.mes_narrate', onNarrateOneMessage);
+        // Nicole's build: lets the per-message speaker button stop playback.
+        window.__TAURITAVERN_TTS__ = Object.freeze({ isBusy: isTtsProcessing, stop: resetTtsPlayback });
     }
     await addExtensionControls(); // No init dependencies
     loadSettings(); // Depends on Extension Controls and loadTtsProvider
