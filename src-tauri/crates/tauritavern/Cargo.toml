@@ -48,6 +48,7 @@ percent-encoding = "2"
 # PC Brain: the PC serves the phone over Tailscale
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 if-addrs = "0.15"
+sha2 = { workspace = true }
 zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 mime_guess = "2.0.5"
 filetime = "0.2"

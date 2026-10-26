@@ -118,6 +118,55 @@ pub async fn hello(http: &reqwest::Client, target: &ClientTarget) -> Result<Valu
     }
 }
 
+type Fetched = (u16, reqwest::header::HeaderMap, bytes::Bytes);
+
+async fn fetch_picture(
+    http: reqwest::Client,
+    method: reqwest::Method,
+    url: String,
+    passcode: String,
+    delivery: String,
+    forwarded: Vec<(&'static str, Vec<u8>)>,
+) -> Result<Fetched, reqwest::Error> {
+    let mut builder = http
+        .request(method, url)
+        .header(KEY_HEADER, passcode)
+        .header(DELIVERY_HEADER, delivery)
+        .timeout(Duration::from_secs(60));
+    for (name, value) in forwarded {
+        builder = builder.header(name, value);
+    }
+    let response = builder.send().await?;
+    let status = response.status().as_u16();
+    let headers = response.headers().clone();
+    let body = response.bytes().await?;
+    Ok((status, headers, body))
+}
+
+fn kept_headers(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| {
+            !matches!(
+                name.as_str(),
+                "connection" | "transfer-encoding" | "keep-alive" | "date" | "content-length"
+            )
+        })
+        .filter_map(|(name, value)| Some((name.as_str().to_string(), value.to_str().ok()?.to_string())))
+        .collect()
+}
+
+fn build_response(status: u16, headers: &[(String, String)], body: Vec<u8>) -> HostResourceResponse {
+    let mut response =
+        Response::builder().status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY));
+    for (name, value) in headers {
+        response = response.header(name.as_str(), value.as_str());
+    }
+    response
+        .body(body)
+        .unwrap_or_else(|_| unavailable("bad response from PC"))
+}
+
 /// Picture and file requests the webview makes on the phone. Returns `None`
 /// when this device is not reading from a PC.
 pub(crate) fn proxy_host_resource(
@@ -133,7 +182,6 @@ pub(crate) fn proxy_host_resource(
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| "/".to_string());
     let url = target.endpoint(&format!("/brain/res{path_and_query}"));
-    tracing::debug!("PC Brain picture {path_and_query}");
     let method = reqwest::Method::from_bytes(request.method().as_str().as_bytes())
         .unwrap_or(reqwest::Method::GET);
     let mut forwarded = Vec::new();
@@ -143,46 +191,71 @@ pub(crate) fn proxy_host_resource(
         }
     }
 
+    // Whole-file reads are cached; ranged reads (audio/video seeking) are not.
+    let cache = brain.picture_cache.as_ref();
+    let cacheable = method == reqwest::Method::GET && !request.headers().contains_key("range");
+    let key = super::picture_cache::PictureCache::key(target.base.as_str(), &path_and_query);
+
+    if cacheable && let Some(cache) = cache && let Some((meta, body)) = cache.get(&key) {
+        if cache.should_check(&key) {
+            // Ask the PC whether it changed, without making the picture wait.
+            let http = brain.proxy_http.clone();
+            let passcode = target.passcode.clone();
+            let url = url.clone();
+            let etag = meta.etag().map(str::to_string);
+            let key = key.clone();
+            // The PC may answer 304 here: this request never reaches the webview.
+            let wire = HostResourceDeliveryCapabilities::new(true, false).to_wire();
+            brain.proxy_runtime.spawn(async move {
+                let mut validators = Vec::new();
+                if let Some(etag) = etag {
+                    validators.push(("if-none-match", etag.into_bytes()));
+                }
+                let result =
+                    fetch_picture(http, reqwest::Method::GET, url, passcode, wire, validators).await;
+                let Some(cache) = super::brain().and_then(|b| b.picture_cache.as_ref()) else {
+                    return;
+                };
+                match result {
+                    Ok((304, _, _)) => cache.touch(&key),
+                    Ok((200, headers, body)) => cache.put(
+                        &key,
+                        &super::picture_cache::CachedMeta { status: 200, headers: kept_headers(&headers) },
+                        &body,
+                    ),
+                    Ok((404 | 410, _, _)) => cache.remove(&key),
+                    _ => {}
+                }
+            });
+        }
+        tracing::debug!("PC Brain picture {path_and_query} (from phone)");
+        return Some(build_response(meta.status, &meta.headers, body));
+    }
+
+    tracing::debug!("PC Brain picture {path_and_query}");
     // The webview may call us on one of Tauri's async workers. Blocking those
     // while they also drive the request deadlocks a small runtime, so picture
     // requests run on their own runtime and we only wait for the answer here.
     let http = brain.proxy_http.clone();
+    let passcode = target.passcode.clone();
+    let wire = delivery.to_wire();
     let (tx, rx) = std::sync::mpsc::channel();
     brain.proxy_runtime.spawn(async move {
-        let fetched = async move {
-            let mut builder = http
-                .request(method, url)
-                .header(KEY_HEADER, &target.passcode)
-                .header(DELIVERY_HEADER, delivery.to_wire())
-                .timeout(Duration::from_secs(60));
-            for (name, value) in forwarded {
-                builder = builder.header(name, value);
-            }
-            let response = builder.send().await?;
-            let status = response.status().as_u16();
-            let headers = response.headers().clone();
-            let body = response.bytes().await?;
-            Ok::<_, reqwest::Error>((status, headers, body))
-        }
-        .await;
-        let _ = tx.send(fetched);
+        let _ = tx.send(fetch_picture(http, method, url, passcode, wire, forwarded).await);
     });
     let fetched = rx.recv_timeout(Duration::from_secs(70));
 
     Some(match fetched {
         Ok(Ok((status, headers, body))) => {
-            let mut response = Response::builder()
-                .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY));
-            for (name, value) in headers.iter() {
-                let lower = name.as_str();
-                if matches!(lower, "connection" | "transfer-encoding" | "keep-alive") {
-                    continue;
-                }
-                response = response.header(lower, value.as_bytes());
+            let kept = kept_headers(&headers);
+            if cacheable && status == 200 && let Some(cache) = cache {
+                cache.put(
+                    &key,
+                    &super::picture_cache::CachedMeta { status, headers: kept.clone() },
+                    &body,
+                );
             }
-            response
-                .body(body.to_vec())
-                .unwrap_or_else(|_| unavailable("bad response from PC"))
+            build_response(status, &kept, body.to_vec())
         }
         Ok(Err(error)) => {
             tracing::warn!("PC Brain picture {path_and_query} failed: {error}");

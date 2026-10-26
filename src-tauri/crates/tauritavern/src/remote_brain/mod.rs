@@ -11,6 +11,7 @@
 mod client;
 pub(crate) mod commands;
 mod config;
+mod picture_cache;
 mod server;
 mod writes;
 
@@ -38,6 +39,8 @@ pub(crate) struct RemoteBrain {
     proxy_runtime: tokio::runtime::Runtime,
     /// Phone only: the PC write count this page loaded with.
     seen_pc_writes: std::sync::atomic::AtomicU64,
+    /// Phone only: pictures already fetched from the PC.
+    picture_cache: Option<picture_cache::PictureCache>,
 }
 
 pub(crate) fn brain() -> Option<&'static Arc<RemoteBrain>> {
@@ -56,6 +59,11 @@ pub(crate) fn install(app: &tauri::App) {
         }
     };
     let config = RemoteBrainConfig::load_or_create(&config_path);
+    let picture_cache = handle
+        .path()
+        .app_cache_dir()
+        .ok()
+        .map(|dir| picture_cache::PictureCache::new(dir.join("pc-brain-pictures")));
     let client = || {
         reqwest::Client::builder()
             .no_proxy()
@@ -80,6 +88,7 @@ pub(crate) fn install(app: &tauri::App) {
         proxy_http: client(),
         proxy_runtime,
         seen_pc_writes: std::sync::atomic::AtomicU64::new(u64::MAX),
+        picture_cache,
     });
     if BRAIN.set(brain.clone()).is_err() {
         return;
