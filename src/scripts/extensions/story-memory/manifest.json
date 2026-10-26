@@ -1,0 +1,14 @@
+{
+    "display_name": "Story Memory",
+    "loading_order": 12,
+    "requires": [],
+    "optional": [],
+    "generate_interceptor": "storyMemory_interceptor",
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Nicole + Claude",
+    "version": "1.0.0",
+    "hooks": {
+        "activate": "init"
+    }
+}

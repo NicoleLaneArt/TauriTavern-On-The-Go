@@ -49,6 +49,7 @@ const SYSTEM_EXTENSIONS: &[&str] = &[
     "expressions",
     "gallery",
     "memory",
+    "story-memory",
     "quick-reply",
     "stable-diffusion",
     "token-counter",
