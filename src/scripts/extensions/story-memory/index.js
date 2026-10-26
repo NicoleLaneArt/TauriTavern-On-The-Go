@@ -206,7 +206,10 @@ function boxMarkdown(box) {
     const lines = [`**${box.name}:**`];
     for (const [key] of BOX_PARTS) {
         const items = Array.isArray(box[key]) ? box[key].filter(Boolean) : [];
-        lines.push(`- **${labels[key]}:** ${items.length ? items.map(item => /[.!?…]$/.test(item) ? item : `${item}.`).join(' ') : '—'}`);
+        lines.push(`- **${labels[key]}:** ${items.length ? items.map(item => {
+            const sentence = item.charAt(0).toUpperCase() + item.slice(1);
+            return /[.!?…]$/.test(sentence) ? sentence : `${sentence}.`;
+        }).join(' ') : '—'}`);
     }
     return lines.join('\n');
 }
