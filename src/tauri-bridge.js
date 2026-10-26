@@ -1,5 +1,7 @@
 // Core Tauri bridge for frontend modules.
 
+import { invokeOnPc, remoteBrainSession, runsOnPc } from './tauri/remote-brain/router.js';
+
 function getTauri() {
     if (typeof window === 'undefined') {
         return null;
@@ -42,8 +44,12 @@ export const invoke = (...args) => {
         throw new Error('Tauri invoke is unavailable');
     }
 
-    if (args.length === 2 && isPlainObject(args[1])) {
-        return fn(args[0], withTauriArgumentAliases(args[1]));
+    if (isPlainObject(args[1])) {
+        args[1] = withTauriArgumentAliases(args[1]);
+    }
+
+    if (remoteBrainSession()?.client && runsOnPc(String(args[0]))) {
+        return invokeOnPc(fn, args[0], args[1], args[2]);
     }
 
     return fn(...args);

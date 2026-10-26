@@ -132,7 +132,20 @@ export async function renderExtensionMenuShortcuts(ids = getExtensionMenuShortcu
             return item;
         });
 
-    container.replaceChildren(...items);
+    // PC Brain is always listed: on a phone reading from a PC it is the way back.
+    const pcBrain = createMenuItem({
+        id: 'pc-brain',
+        label: 'PC Brain',
+        icon: 'fa-brain',
+        open: async () => {},
+    }, i18n.translate);
+    pcBrain.addEventListener('click', () => popup.runOrPopup(async () => {
+        const { openPcBrainPanel } = await import('./pc-brain-panel.js');
+        await openPcBrainPanel();
+    }));
+    keyboard.makeKeyboardInteractable(pcBrain);
+
+    container.replaceChildren(pcBrain, ...items);
     extensions.showHideExtensionsMenu();
 }
 

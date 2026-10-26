@@ -68,6 +68,8 @@ pub(super) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
         &runtime_paths,
         &startup_profile,
     )?;
+    // PC Brain role must be known before the window requests its first picture.
+    crate::remote_brain::install(app);
     let _main_window = super::window::create_main_window(app, host_resource_service)?;
 
     #[cfg(all(desktop, not(windows)))]

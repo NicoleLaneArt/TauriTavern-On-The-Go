@@ -53,6 +53,11 @@ pub(crate) fn dispatch_tauri_host_resource_request(
     if !is_tauri_app_uri(request.uri()) {
         return None;
     }
+    if host_resources.handles(request) {
+        if let Some(response) = crate::remote_brain::proxy_host_resource(request, WRY_DELIVERY) {
+            return Some(response);
+        }
+    }
     host_resources.try_serve(request, WRY_DELIVERY)
 }
 

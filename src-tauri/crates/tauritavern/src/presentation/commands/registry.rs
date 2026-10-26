@@ -1,5 +1,10 @@
 pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
+        crate::remote_brain::commands::remote_brain_get_state,
+        crate::remote_brain::commands::remote_brain_save_config,
+        crate::remote_brain::commands::remote_brain_check,
+        crate::remote_brain::commands::remote_brain_forward,
+        crate::remote_brain::commands::remote_brain_forward_raw,
         super::window_layout_commands::get_window_snapshot,
         super::window_layout_commands::capture_content_viewport,
         super::window_layout_commands::set_window_backdrop,

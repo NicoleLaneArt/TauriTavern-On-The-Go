@@ -45,6 +45,35 @@ impl HostResourceDeliveryCapabilities {
         self
     }
 
+    /// Compact form so a remote host can serve with this webview's delivery rules.
+    pub fn to_wire(self) -> String {
+        format!(
+            "{}{}:{}",
+            u8::from(self.supports_not_modified),
+            u8::from(self.webview_reapplies_range_semantics),
+            self.max_third_party_asset_bytes.unwrap_or(0)
+        )
+    }
+
+    pub fn from_wire(value: &str) -> Option<Self> {
+        let (flags, max) = value.split_once(':')?;
+        let mut chars = flags.chars();
+        let flag = |c: Option<char>| match c {
+            Some('0') => Some(false),
+            Some('1') => Some(true),
+            _ => None,
+        };
+        let not_modified = flag(chars.next())?;
+        let range = flag(chars.next())?;
+        let max: u64 = max.parse().ok()?;
+        let delivery = Self::new(not_modified, range);
+        Some(if max > 0 {
+            delivery.with_max_third_party_asset_bytes(max)
+        } else {
+            delivery
+        })
+    }
+
     const fn supports_not_modified(self) -> bool {
         self.supports_not_modified
     }
@@ -103,6 +132,11 @@ impl HostResourceService {
         }?;
 
         Some(finalize_response(request, response))
+    }
+
+    /// Whether this request names a Host Resource, without serving it.
+    pub fn handles(&self, request: &Request<Vec<u8>>) -> bool {
+        classify_host_resource_route(request).is_some()
     }
 
     pub fn set_avatar_persona_original_images_enabled(&self, enabled: bool) {

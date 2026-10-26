@@ -30,7 +30,13 @@ pub(crate) fn run() {
     // fixed command registry.
     plugins::install(tauri::Builder::default())
         .setup(setup::setup)
-        .invoke_handler(invoke_handler())
+        .invoke_handler({
+            let handler = invoke_handler();
+            move |invoke| {
+                crate::remote_brain::note_invoke(&invoke);
+                handler(invoke)
+            }
+        })
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
                 if webview.label() == "main" {

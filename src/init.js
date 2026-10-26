@@ -88,6 +88,10 @@ async function initializeApplication() {
     try {
         await window.__TAURITAVERN_DEV_SW_READY__;
 
+        // PC Brain decides where data lives before any app module asks for it.
+        const { bootRemoteBrain } = await importWithRetry('./tauri/remote-brain/boot.js');
+        await bootRemoteBrain();
+
         // lib.js statically imports ./dist/lib.core.bundle.js, so this guarantees
         // core library exports are ready before loading the app. Heavy optional
         // libs are loaded on demand from ./dist/lib.optional.bundle.js.
