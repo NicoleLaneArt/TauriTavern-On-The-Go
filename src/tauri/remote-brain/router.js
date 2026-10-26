@@ -73,19 +73,49 @@ function plainHeaders(headers) {
  */
 export function invokeOnPc(rawInvoke, command, args, options) {
     const headers = plainHeaders(options?.headers);
-    if (args instanceof ArrayBuffer || ArrayBuffer.isView(args)) {
-        return rawInvoke('remote_brain_forward_raw', args, {
+    const pending = (args instanceof ArrayBuffer || ArrayBuffer.isView(args))
+        ? rawInvoke('remote_brain_forward_raw', args, {
             headers: {
                 'x-brain-cmd': command,
                 'x-brain-headers': JSON.stringify(headers),
             },
+        })
+        : rawInvoke('remote_brain_forward', {
+            cmd: command,
+            args: args ?? {},
+            headers,
         });
-    }
-    return rawInvoke('remote_brain_forward', {
-        cmd: command,
-        args: args ?? {},
-        headers,
+    return pending.catch((error) => {
+        if (isStaleError(error)) {
+            reloadToLatest(String(error));
+        }
+        throw error;
     });
+}
+
+const STALE_MARKER = 'since this page loaded';
+
+/** @param {unknown} error */
+function isStaleError(error) {
+    return typeof error === 'string' && error.includes(STALE_MARKER);
+}
+
+let reloading = false;
+
+/**
+ * The other device saved newer data; this page must not overwrite it.
+ * @param {string} message
+ */
+export function reloadToLatest(message) {
+    if (reloading) return;
+    reloading = true;
+    try {
+        // @ts-ignore - toastr is a page global once the app has loaded.
+        window.toastr?.warning?.(message, 'PC Brain', { timeOut: 4000 });
+    } catch {
+        // No toast available yet.
+    }
+    setTimeout(() => window.location.reload(), 2500);
 }
 
 /** @returns {{ client: boolean, pcHost: string } | null} */

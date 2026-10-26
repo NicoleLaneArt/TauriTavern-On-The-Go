@@ -83,6 +83,7 @@ pub async fn remote_brain_save_config(config: RemoteBrainConfig) -> Result<Remot
 pub async fn remote_brain_check(
     address: Option<String>,
     passcode: Option<String>,
+    adopt: Option<bool>,
 ) -> Result<Value, String> {
     let brain = brain().ok_or("PC Brain is unavailable on this device")?;
     let target = match (address, passcode) {
@@ -95,13 +96,25 @@ pub async fn remote_brain_check(
             .ok_or("This device is not set to read from a PC")?,
     };
     let mut hello = client::hello(&brain.http, &target).await?;
+    if adopt == Some(true)
+        && let Some(seen) = hello.get("pcWrites").and_then(Value::as_u64)
+    {
+        // This page is loading now, so it holds everything the PC wrote so far.
+        brain.adopt_seen(seen);
+    }
     if let Value::Object(map) = &mut hello {
         map.insert("address".to_string(), json!(target.base.as_str()));
     }
     Ok(hello)
 }
 
-fn into_response(result: Result<ForwardResult, Value>) -> Result<Response, Value> {
+fn into_response(command: &str, started: std::time::Instant, result: Result<ForwardResult, Value>) -> Result<Response, Value> {
+    let elapsed = started.elapsed();
+    match &result {
+        Err(error) => tracing::warn!("PC Brain: {command} failed after {elapsed:?}: {error}"),
+        Ok(_) if elapsed.as_secs() >= 2 => tracing::info!("PC Brain: {command} took {elapsed:?}"),
+        Ok(_) => tracing::debug!("PC Brain: {command} {elapsed:?}"),
+    }
     match result? {
         ForwardResult::Json(json) => Ok(Response::new(json)),
         ForwardResult::Raw(bytes) => Ok(Response::new(bytes)),
@@ -123,10 +136,11 @@ pub async fn remote_brain_forward(
     headers: Option<HashMap<String, String>>,
 ) -> Result<Response, Value> {
     let (brain, target) = client()?;
+    let started = std::time::Instant::now();
     let body = ForwardBody::Json(args.unwrap_or_else(|| json!({})));
-    into_response(
-        client::forward(&brain.http, &target, &cmd, body, &headers.unwrap_or_default()).await,
-    )
+    let result =
+        client::forward(&brain.http, &target, &cmd, body, &headers.unwrap_or_default(), brain.seen()).await;
+    into_response(&cmd, started, result)
 }
 
 /// Byte arguments (desktop chunk uploads) arrive as a raw body; the command and
@@ -150,5 +164,7 @@ pub async fn remote_brain_forward_raw(request: Request<'_>) -> Result<Response, 
         tauri::ipc::InvokeBody::Raw(bytes) => ForwardBody::Raw(bytes.clone()),
         tauri::ipc::InvokeBody::Json(value) => ForwardBody::Json(value.clone()),
     };
-    into_response(client::forward(&brain.http, &target, &command, body, &headers).await)
+    let started = std::time::Instant::now();
+    let result = client::forward(&brain.http, &target, &command, body, &headers, brain.seen()).await;
+    into_response(&command, started, result)
 }

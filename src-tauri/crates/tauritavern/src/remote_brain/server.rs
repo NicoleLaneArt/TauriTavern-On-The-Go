@@ -19,13 +19,14 @@ use tt_application::services::host_resource_service::{
     HostResourceDeliveryCapabilities, HostResourceService,
 };
 
-use super::writes::{self, FROM_PHONE_HEADER};
+use super::writes::{self, FROM_PHONE_HEADER, SEEN_PC_WRITES_HEADER};
 
 pub const KEY_HEADER: &str = "x-brain-key";
 pub const CMD_HEADER: &str = "x-brain-cmd";
 pub const ARG_HEADERS_HEADER: &str = "x-brain-headers";
 pub const RESULT_HEADER: &str = "x-brain-result";
 pub const DELIVERY_HEADER: &str = "x-brain-delivery";
+pub const SEEN_HEADER: &str = "x-brain-seen";
 
 #[derive(Default)]
 pub struct ServerState {
@@ -247,6 +248,9 @@ async fn invoke(
         HeaderName::from_static(FROM_PHONE_HEADER),
         HeaderValue::from_static("1"),
     );
+    if let Some(seen) = headers.get(SEEN_HEADER) {
+        invoke_headers.insert(HeaderName::from_static(SEEN_PC_WRITES_HEADER), seen.clone());
+    }
 
     match dispatch(&ctx.app, command, invoke_body, invoke_headers).await {
         Ok(InvokeResponse::Ok(InvokeResponseBody::Json(json))) => Response::builder()

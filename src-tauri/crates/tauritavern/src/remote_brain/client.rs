@@ -11,7 +11,7 @@ use tt_application::services::host_resource_service::{
 
 use super::config::ClientTarget;
 use super::server::{
-    ARG_HEADERS_HEADER, CMD_HEADER, DELIVERY_HEADER, KEY_HEADER, RESULT_HEADER,
+    ARG_HEADERS_HEADER, CMD_HEADER, DELIVERY_HEADER, KEY_HEADER, RESULT_HEADER, SEEN_HEADER,
 };
 
 pub const OFFLINE_PREFIX: &str = "PC offline";
@@ -34,11 +34,15 @@ pub async fn forward(
     command: &str,
     body: ForwardBody,
     headers: &HashMap<String, String>,
+    seen_pc_writes: Option<u64>,
 ) -> Result<ForwardResult, Value> {
     let mut request = http
         .post(target.endpoint("/brain/invoke"))
         .header(KEY_HEADER, &target.passcode)
         .header(CMD_HEADER, command);
+    if let Some(seen) = seen_pc_writes {
+        request = request.header(SEEN_HEADER, seen.to_string());
+    }
     if !headers.is_empty() {
         let encoded = serde_json::to_string(headers).unwrap_or_default();
         request = request.header(ARG_HEADERS_HEADER, encoded);
@@ -122,7 +126,6 @@ pub(crate) fn proxy_host_resource(
 ) -> Option<HostResourceResponse> {
     let brain = super::brain()?;
     let target = brain.client_target()?;
-    let http = brain.http.clone();
 
     let path_and_query = request
         .uri()
@@ -130,6 +133,7 @@ pub(crate) fn proxy_host_resource(
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| "/".to_string());
     let url = target.endpoint(&format!("/brain/res{path_and_query}"));
+    tracing::debug!("PC Brain picture {path_and_query}");
     let method = reqwest::Method::from_bytes(request.method().as_str().as_bytes())
         .unwrap_or(reqwest::Method::GET);
     let mut forwarded = Vec::new();
@@ -139,10 +143,13 @@ pub(crate) fn proxy_host_resource(
         }
     }
 
-    // The webview calls us on a thread outside the async runtime; run the
-    // request on a scratch thread so this works from any caller.
-    let fetched = std::thread::spawn(move || {
-        tauri::async_runtime::block_on(async move {
+    // The webview may call us on one of Tauri's async workers. Blocking those
+    // while they also drive the request deadlocks a small runtime, so picture
+    // requests run on their own runtime and we only wait for the answer here.
+    let http = brain.proxy_http.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    brain.proxy_runtime.spawn(async move {
+        let fetched = async move {
             let mut builder = http
                 .request(method, url)
                 .header(KEY_HEADER, &target.passcode)
@@ -156,9 +163,11 @@ pub(crate) fn proxy_host_resource(
             let headers = response.headers().clone();
             let body = response.bytes().await?;
             Ok::<_, reqwest::Error>((status, headers, body))
-        })
-    })
-    .join();
+        }
+        .await;
+        let _ = tx.send(fetched);
+    });
+    let fetched = rx.recv_timeout(Duration::from_secs(70));
 
     Some(match fetched {
         Ok(Ok((status, headers, body))) => {
@@ -175,8 +184,14 @@ pub(crate) fn proxy_host_resource(
                 .body(body.to_vec())
                 .unwrap_or_else(|_| unavailable("bad response from PC"))
         }
-        Ok(Err(error)) => unavailable(&format!("{OFFLINE_PREFIX}: {error}")),
-        Err(_) => unavailable("PC Brain picture request failed"),
+        Ok(Err(error)) => {
+            tracing::warn!("PC Brain picture {path_and_query} failed: {error}");
+            unavailable(&format!("{OFFLINE_PREFIX}: {error}"))
+        }
+        Err(_) => {
+            tracing::warn!("PC Brain picture {path_and_query} timed out");
+            unavailable("PC Brain picture request failed")
+        }
     })
 }
 

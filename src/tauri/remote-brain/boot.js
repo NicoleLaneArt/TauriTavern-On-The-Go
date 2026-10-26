@@ -4,6 +4,8 @@
 //   bridge routes data commands to it; otherwise show the "PC offline" screen.
 // - PC (host): remember the phone's change count so a stale page reloads.
 
+import { reloadToLatest } from './router.js';
+
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
 /** @param {string} command @param {any} [args] */
@@ -53,6 +55,27 @@ function rewriteLocalhostFetches(pcHost) {
         }
         return nativeFetch(input, init);
     };
+}
+
+/**
+ * On the phone, page errors are hard to see; keep them in the app's log file
+ * (TauriTavern Settings → Backend Logs) so a failure can be diagnosed.
+ */
+function mirrorErrorsToLog() {
+    /** @param {string} level @param {unknown[]} parts */
+    const send = (level, parts) => {
+        const message = parts.map(part => (part instanceof Error ? `${part.message}\n${part.stack || ''}` : errorText(part))).join(' ');
+        localInvoke('devlog_append_frontend_logs', {
+            entries: [{ level, message: message.slice(0, 4000), target: 'pc-brain-client', timestampMs: Date.now() }],
+        }).catch(() => {});
+    };
+    const originalError = console.error.bind(console);
+    console.error = (...parts) => {
+        send('error', parts);
+        originalError(...parts);
+    };
+    window.addEventListener('error', event => send('error', [event.error || event.message]));
+    window.addEventListener('unhandledrejection', event => send('error', ['Unhandled rejection:', event.reason]));
 }
 
 /** Reload when the other device changed the data while this page was away. */
@@ -122,7 +145,7 @@ function showOfflineScreen(reason, client, config) {
                 margin-top:4px;border-radius:8px;border:2px solid #888;background:#222;color:#fff }`;
         overlay.prepend(style);
         const $ = (/** @type {string} */ selector) => /** @type {HTMLElement} */ (overlay.querySelector(selector));
-        $('[data-reason]').textContent = reason;
+        $('[data-reason]').textContent = reason.replace(/^PC offline:\s*/i, '').replace(/^./, c => c.toUpperCase());
         /** @type {HTMLInputElement} */ ($('[data-address]')).value = client.address || '';
         /** @type {HTMLInputElement} */ ($('[data-passcode]')).value = client.passcode || '';
         const status = $('[data-status]');
@@ -173,7 +196,7 @@ export async function bootRemoteBrain() {
     if (client.enabled) {
         let hello;
         try {
-            hello = await localInvoke('remote_brain_check');
+            hello = await localInvoke('remote_brain_check', { adopt: true });
         } catch (error) {
             await showOfflineScreen(errorText(error), client, state.config);
             return;
@@ -185,6 +208,7 @@ export async function bootRemoteBrain() {
             pcHost,
             pcName: String(hello.name || 'PC'),
         });
+        mirrorErrorsToLog();
         rewriteLocalhostFetches(pcHost);
         reloadWhenOtherDeviceWrote(
             async () => (await localInvoke('remote_brain_check')).pcWrites,
@@ -195,6 +219,11 @@ export async function bootRemoteBrain() {
     }
 
     if (host.enabled) {
+        // A save from this window was refused because the phone saved newer data.
+        // @ts-ignore - Tauri global API.
+        window.__TAURI__.event.listen('remote-brain:stale', (event) => {
+            reloadToLatest(String(event.payload));
+        });
         reloadWhenOtherDeviceWrote(
             async () => (await localInvoke('remote_brain_get_state')).phoneWrites,
             state.phoneWrites,

@@ -22,7 +22,7 @@ use tauri::{AppHandle, Manager};
 
 pub(crate) use client::proxy_host_resource;
 pub(crate) use config::{ClientTarget, RemoteBrainConfig};
-pub(crate) use writes::note_invoke;
+pub(crate) use writes::{check_invoke, pc_page_loaded};
 
 const CONFIG_FILE: &str = "pc-brain.json";
 
@@ -34,6 +34,10 @@ pub(crate) struct RemoteBrain {
     config: RwLock<RemoteBrainConfig>,
     server: Mutex<server::ServerState>,
     http: reqwest::Client,
+    proxy_http: reqwest::Client,
+    proxy_runtime: tokio::runtime::Runtime,
+    /// Phone only: the PC write count this page loaded with.
+    seen_pc_writes: std::sync::atomic::AtomicU64,
 }
 
 pub(crate) fn brain() -> Option<&'static Arc<RemoteBrain>> {
@@ -52,19 +56,30 @@ pub(crate) fn install(app: &tauri::App) {
         }
     };
     let config = RemoteBrainConfig::load_or_create(&config_path);
-    let http = reqwest::Client::builder()
-        .no_proxy()
-        .connect_timeout(Duration::from_secs(6))
-        .pool_idle_timeout(Duration::from_secs(30))
+    let client = || {
+        reqwest::Client::builder()
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(6))
+            .pool_idle_timeout(Duration::from_secs(30))
+            .build()
+            .expect("PC Brain HTTP client")
+    };
+    let proxy_runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_name("pc-brain-pictures")
+        .enable_all()
         .build()
-        .expect("PC Brain HTTP client");
+        .expect("PC Brain picture runtime");
 
     let brain = Arc::new(RemoteBrain {
         app: handle,
         config_path,
         config: RwLock::new(config),
         server: Mutex::new(server::ServerState::default()),
-        http,
+        http: client(),
+        proxy_http: client(),
+        proxy_runtime,
+        seen_pc_writes: std::sync::atomic::AtomicU64::new(u64::MAX),
     });
     if BRAIN.set(brain.clone()).is_err() {
         return;
@@ -93,6 +108,17 @@ impl RemoteBrain {
         *self.config.write().expect("PC Brain config lock") = next;
         self.apply_host().await;
         Ok(())
+    }
+
+    fn seen(&self) -> Option<u64> {
+        match self.seen_pc_writes.load(std::sync::atomic::Ordering::SeqCst) {
+            u64::MAX => None,
+            seen => Some(seen),
+        }
+    }
+
+    fn adopt_seen(&self, seen: u64) {
+        self.seen_pc_writes.store(seen, std::sync::atomic::Ordering::SeqCst);
     }
 
     async fn apply_host(&self) {

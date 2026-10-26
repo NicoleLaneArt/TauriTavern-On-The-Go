@@ -32,14 +32,18 @@ pub(crate) fn run() {
         .setup(setup::setup)
         .invoke_handler({
             let handler = invoke_handler();
-            move |invoke| {
-                crate::remote_brain::note_invoke(&invoke);
-                handler(invoke)
+            move |invoke| match crate::remote_brain::check_invoke(&invoke) {
+                Ok(()) => handler(invoke),
+                Err(message) => {
+                    invoke.resolver.reject(message);
+                    true
+                }
             }
         })
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
                 if webview.label() == "main" {
+                    crate::remote_brain::pc_page_loaded();
                     webview.state::<Arc<PageGeneration>>().advance();
                     webview
                         .state::<Arc<AgentExtensionTools>>()

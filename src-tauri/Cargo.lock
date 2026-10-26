@@ -8959,6 +8959,7 @@ name = "tauritavern"
 version = "2.4.0"
 dependencies = [
  "async-trait",
+ "axum",
  "base64 0.23.1",
  "block2",
  "bytes",
@@ -8968,6 +8969,7 @@ dependencies = [
  "dunce",
  "filetime",
  "futures-util",
+ "if-addrs",
  "image",
  "mime_guess",
  "objc2",
