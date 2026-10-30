@@ -249,15 +249,19 @@ export function installChatDictation() {
             }
 
             setStatus('Starting microphone…');
+            // Legacy mode: bounded single-session recognition to reduce CPU/memory
+            // pressure on older hardware (pre-2022 phones like Pixel 4).
+            // continuous:false lets the OS reclaim resources between utterances
+            // instead of keeping the recognizer alive for the full maxDuration.
             await startSpeechRecognition({
                 language: 'en-US',
-                maxDuration: MAX_RECORDING_DURATION_MS,
+                maxDuration: 3 * 60 * 1000, // 3 min max per tap; lighter footprint
                 interimResults: false,
-                continuous: true,
+                continuous: false,
             });
             // The native state event switches the UI to recording.
             state = 'listening';
-            setStatus('Recording… Tap the microphone again to stop and transcribe.');
+            setStatus('Recording… Tap the microphone again to stop. (Legacy mode: up to 3 min)');
         } catch (error) {
             isInstallingModel = false;
             state = 'idle';
