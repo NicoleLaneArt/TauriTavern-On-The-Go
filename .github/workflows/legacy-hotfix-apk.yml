@@ -1,0 +1,99 @@
+name: Legacy Hotfix APK (pre-2022 phones)
+
+# Manually triggered. Run this from the legacy-hotfix-pre2022 branch
+# to produce an APK tuned for older hardware (Pixel 4, etc.).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-legacy-apk:
+    name: Build legacy APK (arm64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Setup JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: "21"
+          distribution: temurin
+          cache: gradle
+          cache-dependency-path: |
+            src-tauri/crates/tauritavern/gen/android/**/*.gradle*
+            src-tauri/crates/tauritavern/gen/android/**/gradle-wrapper.properties
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r29
+          link-to-sdk: true
+
+      - name: Configure Android compiler
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          sysroot="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          {
+            echo "AR_aarch64_linux_android=$toolchain/llvm-ar"
+            echo "CC_aarch64_linux_android=$toolchain/aarch64-linux-android24-clang"
+            echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--sysroot=$sysroot"
+          } >> "$GITHUB_ENV"
+
+      - uses: pnpm/setup@v2
+        with:
+          runtime: node@22
+          cache: true
+          install: false
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Set keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > keystore.jks
+          {
+            echo "KEYSTORE_PATH=$(pwd)/keystore.jks"
+            echo "KEY_ALIAS=$KEY_ALIAS"
+            echo "KEY_PASSWORD=$KEY_PASSWORD"
+            echo "STORE_PASSWORD=$STORE_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Build legacy APK
+        run: |
+          pnpm tauri android build \
+            --apk \
+            --target aarch64 \
+            --verbose
+
+      - name: Upload legacy APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TauriTavern-Nicole-legacy-pre2022-arm64
+          path: |
+            src-tauri/crates/tauritavern/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
