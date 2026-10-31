@@ -4,7 +4,7 @@
 
 A custom fork of [TauriTavern](https://github.com/Darkatse/TauriTavern) built for authors, roleplayers, and anyone who wants their full AI companion setup available on their phone — synced live to their PC library, hands-free, and ready to go.
 
-Built by **[Nicole Lane](https://github.com/NicoleLaneArt)** — indie author, heavy roleplay user, and someone who needed this to exist.
+Built by **[Nicole Lane](https://github.com/NicoleLaneArt)** — artist, author, writer and business owner of [Rescue My Bot website](https://rescuemybot.com).
 
 ---
 
