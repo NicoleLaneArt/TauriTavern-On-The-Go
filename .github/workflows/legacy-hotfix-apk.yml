@@ -73,15 +73,16 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > keystore.jks
-          {
-            echo "KEYSTORE_PATH=$(pwd)/keystore.jks"
-            echo "KEY_ALIAS=$KEY_ALIAS"
-            echo "KEY_PASSWORD=$KEY_PASSWORD"
-            echo "STORE_PASSWORD=$STORE_PASSWORD"
-          } >> "$GITHUB_ENV"
+          # Decode keystore to the Android project root (where Gradle looks for it)
+          ANDROID_PROJECT="src-tauri/crates/tauritavern/gen/android"
+          echo "$KEYSTORE_BASE64" | base64 -d > "$ANDROID_PROJECT/keystore.jks"
+          # Write keystore.properties in the format build.gradle.kts expects
+          cat > "$ANDROID_PROJECT/keystore.properties" <<EOF
+          storeFile=keystore.jks
+          keyAlias=$KEY_ALIAS
+          password=$KEY_PASSWORD
+          EOF
 
       - name: Build legacy APK
         run: |
